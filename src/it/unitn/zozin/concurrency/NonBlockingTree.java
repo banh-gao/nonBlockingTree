@@ -3,11 +3,14 @@ package it.unitn.zozin.concurrency;
 import it.unitn.zozin.concurrency.Node.DummyNode;
 import it.unitn.zozin.concurrency.Node.InternalNode;
 import it.unitn.zozin.concurrency.Node.Leaf;
+import it.unitn.zozin.concurrency.NonBlockingTree.TreeVisitor;
 import java.util.AbstractSet;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicStampedReference;
 
 public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 
@@ -15,8 +18,8 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	private final DummyNode<K> DUMMY_NODE1;
 	private final DummyNode<K> DUMMY_NODE2;
 	private final AtomicInteger size = new AtomicInteger();
-	private class SearchRes {
 
+	private class SearchRes {
 		InternalNode<K> gp;
 		InternalNode<K> p;
 		Leaf<K> l;
@@ -134,13 +137,14 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	private void helpInsert(InsertInfo<K> insertOp) {
 		// Substitute either left or right child of the parent tree with the new
 		// subtree
-		insertOp.p.setChild(insertOp.l, insertOp.newInternal);
+		if (insertOp.p.setChild(insertOp.l, insertOp.newInternal)) {
 
-		// Update size counter
-		size.getAndIncrement();
+			// Update size counter
+			size.getAndIncrement();
 
-		// Reset parent flag and unset reference to info record
-		insertOp.p.setUpdate(new Update<K>(Update.IFLAG, insertOp), null, Update.CLEAN);
+			// Reset parent flag and unset reference to info record
+			insertOp.p.setUpdate(new Update<K>(Update.IFLAG, insertOp), insertOp, Update.CLEAN);
+		}
 	}
 
 	public boolean delete(K key) {
@@ -187,6 +191,9 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 		} else {
 			// MARK failed, help who caused the failure
 			help(deleteOp.p.getUpdate());
+			// Backtrack CAS because the delete has to be retried starting by
+			// setting the grandparent DFLAG
+			deleteOp.gp.setUpdate(deleteOp.gp.getUpdate(), deleteOp, Update.CLEAN);
 			return false;
 		}
 	}
@@ -200,14 +207,15 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 		else
 			other = deleteOp.p.getRight();
 
-		// Use the sibling of the node to remove as the new parent
-		deleteOp.gp.setChild(deleteOp.p, other);
+		// Set the sibling of the node to remove, as a child of the grandparent
+		if (deleteOp.gp.setChild(deleteOp.p, other)) {
 
-		// Update size counter
-		size.getAndDecrement();
+			// Update size counter
+			size.getAndDecrement();
 
-		// Reset grandparent flag and unset reference to info record
-		deleteOp.gp.setUpdate(new Update<K>(Update.DFLAG, deleteOp), null, Update.CLEAN);
+			// Reset grandparent flag and unset reference to info record
+			deleteOp.gp.setUpdate(new Update<K>(Update.DFLAG, deleteOp), deleteOp, Update.CLEAN);
+		}
 	}
 
 	private void help(Update<K> update) {
@@ -223,7 +231,7 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 				break;
 		}
 	}
-	
+
 	/**
 	 * METHODS FOR COMPLIANCE WITH THE SET INTERFACE
 	 */
@@ -278,14 +286,14 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 			NonBlockingTree.this.remove(last);
 		}
 	}
-	
+
 	/**
 	 * Perform an in-order visit of the tree, including internal nodes
 	 */
 	void inVisit(TreeVisitor<K> v) {
 		root.inVisit(v, 0);
 	}
-	
+
 	/**
 	 * Perform a pre-order visit of the tree, including internal nodes
 	 */
@@ -300,51 +308,180 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 }
 
 /**
- * Operation information used by threads to help each other in completing the update operation on the tree
+ * Operation information used by threads to help each other in completing the
+ * update operation on the tree
  */
 interface OperationInfo<K extends Comparable<K>> {
 }
 
 class InsertInfo<K extends Comparable<K>> implements OperationInfo<K> {
+
 	InternalNode<K> p;
 	InternalNode<K> newInternal;
 	Leaf<K> l;
+
 	public InsertInfo(InternalNode<K> p, InternalNode<K> newInternal, Leaf<K> l) {
 		this.p = p;
 		this.newInternal = newInternal;
 		this.l = l;
 	}
+
+	@Override
+	public String toString() {
+		return "HELPINSERT: p=" + p + ", newSub=" + newInternal + ", l=" + l;
+	}
 }
 
 class DeleteInfo<K extends Comparable<K>> implements OperationInfo<K> {
+
 	InternalNode<K> gp;
 	InternalNode<K> p;
 	Leaf<K> l;
 	Update<K> pupdate;
-	
+
 	public DeleteInfo(InternalNode<K> gp, InternalNode<K> p, Leaf<K> l, Update<K> pupdate) {
 		this.gp = gp;
 		this.p = p;
 		this.l = l;
 		this.pupdate = pupdate;
 	}
-	
-	
+
+	@Override
+	public String toString() {
+		return "HELPDELETE: gp=" + gp + ", p=" + p + ", l=" + l;
+	}
+
 }
 
 class Update<K extends Comparable<K>> {
-	
+
 	public static final int CLEAN = 0;
 	public static final int IFLAG = 1;
 	public static final int DFLAG = 2;
 	public static final int MARK = 3;
-	
+
 	int state;
 	OperationInfo<K> info;
-	
-	
+
 	public Update(int state, OperationInfo<K> info) {
 		this.state = state;
 		this.info = info;
+	}
+
+	@Override
+	public String toString() {
+		return "STATE: " + state + " INFO: " + info.toString();
+	}
+}
+
+abstract class Node<K extends Comparable<K>> {
+	
+	public K key;
+	
+	Node(K key) {
+		this.key = key;
+	}
+	
+	public abstract void inVisit(TreeVisitor<K> v, int level);
+	
+	public abstract void preVisit(TreeVisitor<K> v, int level);
+	
+	@Override
+	public String toString() {
+		return "Leaf " + key.toString();
+	}
+	
+	public static class Leaf<K extends Comparable<K>> extends Node<K> {
+
+		Leaf(K key) {
+			super(key);
+		}
+		
+		public static <K extends Comparable<K>> Leaf<K> getInstance(K key) {
+			return new Leaf<K>(key);
+		}
+
+		@Override
+		public void inVisit(TreeVisitor<K> v, int level) {
+			v.visit(this, level);
+		}
+		
+		@Override
+		public void preVisit(TreeVisitor<K> v, int level) {
+			v.visit(this, level);
+		}
+	}
+
+
+	public static class DummyNode<K extends Comparable<K>> extends Leaf<K> {
+
+		private DummyNode(K key) {
+			super(key);
+		}
+
+		public static <K extends Comparable<K>> DummyNode<K> getInstance(K dummyKey) {
+			return new DummyNode<K>(dummyKey);
+		}
+	}
+	
+	public static class InternalNode<K extends Comparable<K>> extends Node<K> {
+    
+		private AtomicReference<Node<K>> left = new AtomicReference<Node<K>>();
+		private AtomicReference<Node<K>> right = new AtomicReference<Node<K>>();
+		private AtomicStampedReference<OperationInfo<K>> update = new AtomicStampedReference<OperationInfo<K>>(null, Update.CLEAN);
+
+		public static <K extends Comparable<K>> InternalNode<K> getInstance(K key, Node<K> left, Node<K> right) {
+			return new InternalNode<K>(key, left, right);
+		}
+
+		private InternalNode(K key, Node<K> left, Node<K> right) {
+			super(key);
+			this.left.set(left);
+			this.right.set(right);
+		}
+		
+		public boolean setChild(Node<K> expectedNode, Node<K> newNode) {
+			if(newNode.key.compareTo(key) < 0)
+				return this.left.compareAndSet(expectedNode, newNode);
+			else
+				return this.right.compareAndSet(expectedNode, newNode);
+		}
+
+		public boolean setUpdate(Update<K> expectedUpd, OperationInfo<K> newInfo, int newState) {
+			return this.update.compareAndSet(expectedUpd.info, newInfo, expectedUpd.state, newState);
+		}
+
+		public Node<K> getLeft() {
+			return left.get();
+		}
+
+		public Node<K> getRight() {
+			return right.get();
+		}
+
+		public Update<K> getUpdate() {
+			int[] state = new int[1];
+			OperationInfo<K> i = update.get(state);
+			return new Update<K>(state[0], i);
+		}
+		
+		@Override
+		public void inVisit(TreeVisitor<K> v, int level) {
+			getLeft().inVisit(v, level+1);
+			v.visit(this, level);
+			getRight().inVisit(v, level+1);
+		}
+		
+		@Override
+		public void preVisit(TreeVisitor<K> v, int level) {
+			v.visit(this, level);
+			getLeft().preVisit(v, level+1);
+			getRight().preVisit(v, level+1);
+		}
+		
+		@Override
+		public String toString() {
+			return "Internal " + key.toString();
+		}
 	}
 }
