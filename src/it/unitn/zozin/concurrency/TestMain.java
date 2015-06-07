@@ -1,8 +1,8 @@
 package it.unitn.zozin.concurrency;
 
-import it.unitn.zozin.concurrency.Node.InternalNode;
-import it.unitn.zozin.concurrency.Node.Leaf;
-import it.unitn.zozin.concurrency.NonBlockingTree.TreeVisitor;
+import it.unitn.zozin.concurrency.NonBlockingTree.InternalNode;
+import it.unitn.zozin.concurrency.NonBlockingTree.Leaf;
+import it.unitn.zozin.concurrency.NonBlockingTree.Node;
 import java.io.BufferedWriter;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -22,9 +22,9 @@ public class TestMain {
 	static int MAX_VALUE;
 	static int NUM_TASKS;
 
-	static final Integer D1 = Integer.MIN_VALUE;
 	static final Integer D2 = Integer.MAX_VALUE;
-	static NonBlockingTree<Integer> tree = new NonBlockingTree<Integer>(D1, D2);
+	static final Integer D1 = D2 - 1;
+	static NonBlockingTree<Integer> tree = NonBlockingTree.getInstance(D1, D2);
 
 	static ExecutorService threadPool;
 	static final Random r = new Random();
@@ -58,6 +58,7 @@ public class TestMain {
 		String OUT_FILE = args[3];
 
 		runTest();
+
 		generatePrintout(OUT_FILE);
 	}
 
@@ -66,7 +67,6 @@ public class TestMain {
 		System.out.println(String.format("Running %s operations using %s threads...", 5 * NUM_TASKS, MAX_THREADS));
 
 		long start = System.currentTimeMillis();
-		long startMem = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
 
 		for (int i = 0; i < NUM_TASKS; i++)
 			threadPool.execute(TREE_TASK);
@@ -77,7 +77,6 @@ public class TestMain {
 		}
 
 		System.out.println(String.format("Total time:\t%s ms", System.currentTimeMillis() - start));
-		System.out.println(String.format("Heap size:\t%s MB", ((Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory()) - startMem) / (1024 * 1024)));
 		System.out.println(String.format("Operations:\t%s", 5 * NUM_TASKS));
 		System.out.println(String.format("Threads:\t%s", MAX_THREADS));
 	}
@@ -98,66 +97,79 @@ class GraphGenerator {
 	private static final String DUMMY1 = "∞₁";
 	private static final String DUMMY2 = "∞₂";
 
+	static final StringBuilder b = new StringBuilder();
+	static final List<Integer> path = new ArrayList<Integer>();
+	static int nextId = 0;
+
 	public static String generate(NonBlockingTree<Integer> t) {
-		final StringBuilder b = new StringBuilder();
 		b.append("digraph {\n");
 
-		t.preVisit(new TreeVisitor<Integer>() {
+		visit(t.root, 0);
 
-			List<Integer> path = new ArrayList<Integer>();
-			int nextId = 0;
-
-			@Override
-			public void visit(Node<Integer> node, int level) {
-
-				int id = nextId++;
-				String label = genLabel(node);
-
-				// Set node style
-				b.append(id);
-				if (node instanceof InternalNode) {
-					b.append(" [label=\"" + label + "\",shape=circle];\n");
-					if (path.size() < level)
-						path.set(level, id);
-					else
-						path.add(level, id);
-				} else if (node instanceof Leaf) {
-					if (isDummy(node))
-						b.append(" [label=\"" + label + "\",shape=box];\n");
-					else
-						b.append(" [label=\"" + label + "\",style=filled,fillcolor=lightgrey,shape=box];\n");
-				}
-
-				// Ignore path to root
-				if (level == 0) {
-					return;
-				}
-
-				// Print edge from parent to current node
-				b.append(path.get(level - 1));
-				b.append(" -> ");
-				b.append(id);
-				b.append(";\n");
-			}
-		});
 		b.append("}");
 		return b.toString();
 	}
 
-	private static String genLabel(Node<Integer> node) {
+	@SuppressWarnings("rawtypes")
+	private static void visit(Node n, int level) {
+		appendNode(n, level);
+		if (n instanceof InternalNode) {
+			visit(((InternalNode) n).getLeft(), level + 1);
+			visit(((InternalNode) n).getRight(), level + 1);
+		}
+	}
+
+	@SuppressWarnings("rawtypes")
+	private static void appendNode(Node node, int level) {
+		int id = nextId++;
+		String label = genLabel(node);
+
+		// Set node style
+		b.append(id);
+		if (node instanceof InternalNode) {
+			b.append(" [label=\"" + label + "\",shape=circle];\n");
+			if (path.size() < level)
+				path.set(level, id);
+			else
+				path.add(level, id);
+		} else if (node instanceof Leaf) {
+			if (isDummy(node))
+				b.append(" [label=\"" + label + "\",shape=box];\n");
+			else
+				b.append(" [label=\"" + label + "\",style=filled,fillcolor=lightgrey,shape=box];\n");
+		}
+
+		// Ignore path to root
+		if (level == 0) {
+			return;
+		}
+
+		// Print edge from parent to current node
+		b.append(path.get(level - 1));
+		b.append(" -> ");
+		b.append(id);
+		b.append(";\n");
+	}
+
+	@SuppressWarnings({"rawtypes", "unchecked"})
+	private static String genLabel(Node node) {
 		if (isRoot(node))
 			return "R";
-		else if (isDummy(node))
-			return (node.key.compareTo(TestMain.D1) == 0) ? DUMMY1 : DUMMY2;
+		else if (node.key.compareTo(TestMain.D1) == 0)
+			return DUMMY1;
+		else if (node.key.compareTo(TestMain.D2) == 0)
+			return DUMMY2;
 		else
 			return node.key.toString();
 	}
 
-	private static boolean isRoot(Node<Integer> n) {
-		return (n instanceof Node.InternalNode && n.key.equals(TestMain.D2));
+	@SuppressWarnings("rawtypes")
+	private static boolean isRoot(Node n) {
+		return (n instanceof InternalNode && n.key.equals(TestMain.D2));
 	}
 
-	static boolean isDummy(Node<Integer> n) {
-		return (n instanceof Node.DummyNode);
+	@SuppressWarnings({"rawtypes", "unchecked"})
+	static boolean isDummy(Node n) {
+		return n.key.compareTo(TestMain.D1) == 0 || n.key.compareTo(TestMain.D2) == 0;
 	}
 }
