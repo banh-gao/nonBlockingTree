@@ -22,9 +22,7 @@ public class TestMain {
 	static int MAX_VALUE;
 	static int NUM_TASKS;
 
-	static final Integer D2 = Integer.MAX_VALUE;
-	static final Integer D1 = D2 - 1;
-	static NonBlockingTree<Integer> tree = NonBlockingTree.getInstance(D1, D2);
+	static NonBlockingTree<Integer> tree = NonBlockingTree.getInstance(Integer.MAX_VALUE - 1, Integer.MAX_VALUE);
 
 	static ExecutorService threadPool;
 	static final Random r = new Random();
@@ -100,8 +98,10 @@ class GraphGenerator {
 	static final StringBuilder b = new StringBuilder();
 	static final List<Integer> path = new ArrayList<Integer>();
 	static int nextId = 0;
+	private static NonBlockingTree<Integer> t;
 
 	public static String generate(NonBlockingTree<Integer> t) {
+		GraphGenerator.t = t;
 		b.append("digraph {\n");
 
 		visit(t.root, 0);
@@ -133,7 +133,7 @@ class GraphGenerator {
 			else
 				path.add(level, id);
 		} else if (node instanceof Leaf) {
-			if (isDummy(node))
+			if (t.isDummy((Integer) node.key))
 				b.append(" [label=\"" + label + "\",shape=box];\n");
 			else
 				b.append(" [label=\"" + label + "\",style=filled,fillcolor=lightgrey,shape=box];\n");
@@ -153,23 +153,19 @@ class GraphGenerator {
 
 	@SuppressWarnings({"rawtypes", "unchecked"})
 	private static String genLabel(Node node) {
-		if (isRoot(node))
+		if (isRoot(node)) {
+			System.out.println(node);
 			return "R";
-		else if (node.key.compareTo(TestMain.D1) == 0)
+		} else if (node.key.compareTo(t.dummyKey1) == 0)
 			return DUMMY1;
-		else if (node.key.compareTo(TestMain.D2) == 0)
+		else if (node.key.compareTo(t.dummyKey2) == 0)
 			return DUMMY2;
 		else
 			return node.key.toString();
 	}
 
-	@SuppressWarnings("rawtypes")
-	private static boolean isRoot(Node n) {
-		return (n instanceof InternalNode && n.key.equals(TestMain.D2));
-	}
-
 	@SuppressWarnings({"rawtypes", "unchecked"})
-	static boolean isDummy(Node n) {
-		return n.key.compareTo(TestMain.D1) == 0 || n.key.compareTo(TestMain.D2) == 0;
+	private static boolean isRoot(Node n) {
+		return (n instanceof InternalNode && n.key.compareTo(t.dummyKey2) == 0);
 	}
 }
