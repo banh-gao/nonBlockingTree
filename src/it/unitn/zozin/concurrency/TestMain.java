@@ -45,7 +45,7 @@ public class TestMain {
 			System.out.println("Usage: " + new java.io.File(TestMain.class.getProtectionDomain().getCodeSource().getLocation().getPath()).getName() + " <numTasks> <numThreads> <maxValue> <outFile>");
 			System.out.println("numTasks\tNumber of tasks to execute. Each task performs 2 insert, 1 find and 1 delete.");
 			System.out.println("numThreads\tNumber of threads to be used to run the tasks concurrently.");
-			System.out.println("maxValue\tMaximum integer value to be inserted in the tree. The values used for the test are randomly choosen in the interval [0-maxValue].");
+			System.out.println("maxValue\tMaximum integer value to be inserted in the tree. The values used for the test are randomly chosen in the interval [0-maxValue].");
 			System.out.println("outFile \tFile where to save the tree in dot format at the end of the test.");
 			return;
 		}
@@ -119,7 +119,7 @@ class GraphGenerator {
 		}
 	}
 
-	@SuppressWarnings("rawtypes")
+	@SuppressWarnings({"rawtypes", "unchecked"})
 	private static void appendNode(Node node, int level) {
 		int id = nextId++;
 		String label = genLabel(node);
@@ -133,7 +133,7 @@ class GraphGenerator {
 			else
 				path.add(level, id);
 		} else if (node instanceof Leaf) {
-			if (t.isDummy((Integer) node.key))
+			if (node.key.compareTo(t.dummyKey1) == 0 || node.key.compareTo(t.dummyKey2) == 0)
 				b.append(" [label=\"" + label + "\",shape=box];\n");
 			else
 				b.append(" [label=\"" + label + "\",style=filled,fillcolor=lightgrey,shape=box];\n");
@@ -154,7 +154,6 @@ class GraphGenerator {
 	@SuppressWarnings({"rawtypes", "unchecked"})
 	private static String genLabel(Node node) {
 		if (isRoot(node)) {
-			System.out.println(node);
 			return "R";
 		} else if (node.key.compareTo(t.dummyKey1) == 0)
 			return DUMMY1;

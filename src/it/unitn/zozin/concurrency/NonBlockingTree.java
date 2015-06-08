@@ -322,9 +322,9 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	 */
 	abstract class Node {
 
-		public final K key;
+		final K key;
 
-		Node(K key) {
+		private Node(K key) {
 			this.key = key;
 		}
 	}
