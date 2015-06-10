@@ -117,6 +117,11 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	 *         tree
 	 */
 	public boolean find(K key) {
+		if(key == null)
+			throw new NullPointerException();
+		if(key.compareTo(dummyKey1) >= 0)
+			throw new IllegalArgumentException();
+		
 		SearchRes r = search(key);
 		return r.l.key.compareTo(key) == 0;
 	}
@@ -134,6 +139,11 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	 */
 	@SuppressWarnings("unchecked")
 	public boolean insert(K key) {
+		if(key == null)
+			throw new NullPointerException();
+		if(key.compareTo(dummyKey1) >= 0)
+			throw new IllegalArgumentException();
+		
 		OperationInfo opInfo;
 		int[] state = new int[1];
 
@@ -220,6 +230,11 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	 */
 	@SuppressWarnings("unchecked")
 	public boolean delete(K key) {
+		if(key == null)
+			throw new NullPointerException();
+		if(key.compareTo(dummyKey1) >= 0)
+			throw new IllegalArgumentException();
+		
 		OperationInfo opInfo;
 		int[] state = new int[1];
 
