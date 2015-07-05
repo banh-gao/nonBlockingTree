@@ -4,8 +4,7 @@ import java.util.AbstractSet;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.concurrent.atomic.AtomicStampedReference;
 
 /**
@@ -23,24 +22,10 @@ import java.util.concurrent.atomic.AtomicStampedReference;
 public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 
 	// Root node of the tree
-	final InternalNode root;
+	final InternalNode<K> root;
+
 	final K dummyKey1;
 	final K dummyKey2;
-
-	// Leaves counter
-	private final AtomicInteger size = new AtomicInteger();
-
-	// Stores results of a search
-	private class SearchRes {
-
-		InternalNode gp;
-		InternalNode p;
-		Leaf l;
-		OperationInfo pinfo;
-		int pstate;
-		OperationInfo gpinfo;
-		int gpstate;
-	}
 
 	/**
 	 * Creates a new instance of the tree
@@ -52,11 +37,7 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	 *            Second dummy key to be used. It has to be greater than all
 	 *            other keys.
 	 */
-	public static <K extends Comparable<K>> NonBlockingTree<K> getInstance(K dummyKey1, K dummyKey2) {
-		return new NonBlockingTree<K>(dummyKey1, dummyKey2);
-	}
-
-	private NonBlockingTree(K dummyKey1, K dummyKey2) {
+	public NonBlockingTree(K dummyKey1, K dummyKey2) {
 		if (dummyKey1 == null || dummyKey2 == null)
 			throw new NullPointerException();
 		if (dummyKey1.compareTo(dummyKey2) >= 0)
@@ -65,24 +46,35 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 		this.dummyKey1 = dummyKey1;
 		this.dummyKey2 = dummyKey2;
 
-		this.root = new InternalNode(dummyKey2, new Leaf(dummyKey1), new Leaf(dummyKey2));
+		this.root = new InternalNode<K>(dummyKey2, new Leaf<K>(dummyKey1), new Leaf<K>(dummyKey2));
+	}
+
+	// Stores results of a search
+	private class SearchRes {
+
+		InternalNode<K> gp;
+		InternalNode<K> p;
+		Leaf<K> l;
+		OperationInfo pinfo;
+		int pstate;
+		OperationInfo gpinfo;
+		int gpstate;
 	}
 
 	/**
 	 * Search from root to leaf for the given key
 	 */
-	@SuppressWarnings("unchecked")
 	private SearchRes search(K key) {
 		SearchRes r = new SearchRes();
 
-		Node cur = root;
+		Node<K> cur = root;
 
 		int[] state = new int[1];
 		while (cur instanceof NonBlockingTree.InternalNode) {
 			// Remember parent of p
 			r.gp = r.p;
 			// Remember parent of l
-			r.p = (InternalNode) cur;
+			r.p = (InternalNode<K>) cur;
 			// Remember update field of gp
 			r.gpinfo = r.pinfo;
 			r.gpstate = r.pstate;
@@ -98,7 +90,7 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 				cur = r.p.getRight();
 		}
 
-		r.l = (Leaf) cur;
+		r.l = (Leaf<K>) cur;
 
 		return r;
 	}
@@ -156,7 +148,7 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 				continue;
 			}
 
-			InternalNode newInternal = createSubTree(r.l, key);
+			InternalNode<K> newInternal = createSubTree(r.l, key);
 
 			opInfo = new InsertInfo(r.p, newInternal, r.l);
 
@@ -177,23 +169,23 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	 * @return Subtree with 3 nodes: internal node, new key leaf, sibling leaf
 	 *         (old leaf that will we replaced with this tree)
 	 */
-	private InternalNode createSubTree(Node siblingNode, K newKey) {
-		Node left, right;
+	private InternalNode<K> createSubTree(Node<K> siblingNode, K newKey) {
+		Node<K> left, right;
 		K max;
 
 		if (siblingNode.key.compareTo(newKey) < 0) {
-			left = new Leaf(siblingNode.key);
-			right = new Leaf(newKey);
+			left = new Leaf<K>(siblingNode.key);
+			right = new Leaf<K>(newKey);
 			max = newKey;
 		} else {
 			// siblingNode == newKey not possible since duplicated key are not
 			// admitted
-			left = new Leaf(newKey);
-			right = new Leaf(siblingNode.key);
+			left = new Leaf<K>(newKey);
+			right = new Leaf<K>(siblingNode.key);
 			max = siblingNode.key;
 		}
 
-		return new InternalNode(max, left, right);
+		return new InternalNode<K>(max, left, right);
 	}
 
 	/**
@@ -203,9 +195,6 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 		// Substitute either left or right child of the parent tree with the new
 		// subtree
 		if (insertOp.p.spliceChild(insertOp.l, insertOp.newInternal)) {
-
-			// Update size counter
-			size.getAndIncrement();
 
 			// Reset parent flag
 			insertOp.p.setUpdate(insertOp, OperationInfo.IFLAG, insertOp, OperationInfo.CLEAN);
@@ -294,7 +283,7 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	 * Tries to complete the given delete operation on the tree
 	 */
 	private void helpMarked(DeleteInfo deleteOp) {
-		Node other;
+		Node<K> other;
 
 		// Set other to point to the sibling of the node to remove (deleteOp.l)
 		if (deleteOp.p.getRight() == deleteOp.l)
@@ -304,9 +293,6 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 
 		// Set the sibling of the node to remove, as a child of the grandparent
 		if (deleteOp.gp.spliceChild(deleteOp.p, other)) {
-
-			// Update size counter
-			size.getAndDecrement();
 
 			// Reset grandparent flag
 			deleteOp.gp.setUpdate(deleteOp, OperationInfo.DFLAG, deleteOp, OperationInfo.CLEAN);
@@ -334,7 +320,7 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	/**
 	 * A generic keyed node entity that forms the tree in memory
 	 */
-	abstract class Node {
+	static abstract class Node<K extends Comparable<K>> {
 
 		final K key;
 
@@ -347,44 +333,61 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	 * An internal node with two children nodes and a status field used for
 	 * concurrent updates.
 	 */
-	class InternalNode extends Node {
+	static class InternalNode<K extends Comparable<K>> extends Node<K> {
 
-		// Left child (child key < this key) 
-		private AtomicReference<Node> left = new AtomicReference<Node>();
-		// Right child  (this key < child key)
-		private AtomicReference<Node> right = new AtomicReference<Node>();
+		// Atomic reference updaters used to update internal nodes' left and
+		// right children
+		@SuppressWarnings("rawtypes")
+		private static final AtomicReferenceFieldUpdater<InternalNode, Node> leftUpdater = AtomicReferenceFieldUpdater.newUpdater(InternalNode.class, Node.class, "left");
+		@SuppressWarnings("rawtypes")
+		private static final AtomicReferenceFieldUpdater<InternalNode, Node> rightUpdater = AtomicReferenceFieldUpdater.newUpdater(InternalNode.class, Node.class, "right");
+
+		// Left child (child key < this key)
+		private volatile Node<K> left;
+		// Right child (this key < child key)
+		private volatile Node<K> right;
+
 		// Update status of the node (ongoing insert or delete operation)
 		private AtomicStampedReference<OperationInfo> update = new AtomicStampedReference<OperationInfo>(null, OperationInfo.CLEAN);
 
-		private InternalNode(K key, Node left, Node right) {
+		private InternalNode(K key, Node<K> left, Node<K> right) {
 			super(key);
-			this.left.set(left);
-			this.right.set(right);
+			this.left = left;
+			this.right = right;
 		}
 
 		/**
 		 * Atomically tries to replace one of the children of the node
 		 */
-		public boolean spliceChild(Node expectedNode, Node newNode) {
+		public boolean spliceChild(Node<K> expectedNode, Node<K> newNode) {
 			if (newNode.key.compareTo(key) < 0)
-				return this.left.compareAndSet(expectedNode, newNode);
+				return casLeft(expectedNode, newNode);
 			else
-				return this.right.compareAndSet(expectedNode, newNode);
+				return casRight(expectedNode, newNode);
+		}
+
+		private boolean casLeft(Node<K> cmp, Node<K> val) {
+			return leftUpdater.compareAndSet(this, cmp, val);
+		}
+
+		private boolean casRight(Node<K> cmp, Node<K> val) {
+			return rightUpdater.compareAndSet(this, cmp, val);
 		}
 
 		/**
-		 * Atomically tries to set the update state and operation info of the node
+		 * Atomically tries to set the update state and operation info of the
+		 * node
 		 */
 		public boolean setUpdate(OperationInfo expInfo, int expState, OperationInfo newInfo, int newState) {
 			return this.update.compareAndSet(expInfo, newInfo, expState, newState);
 		}
 
-		public Node getLeft() {
-			return left.get();
+		public Node<K> getLeft() {
+			return left;
 		}
 
-		public Node getRight() {
-			return right.get();
+		public Node<K> getRight() {
+			return right;
 		}
 
 		public OperationInfo getUpdate(int[] state) {
@@ -400,7 +403,7 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	/**
 	 * A leaf node that stores the actual value in the tree.
 	 */
-	class Leaf extends Node {
+	static class Leaf<K extends Comparable<K>> extends Node<K> {
 
 		private Leaf(K key) {
 			super(key);
@@ -429,11 +432,11 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	 */
 	class InsertInfo implements OperationInfo {
 
-		InternalNode p;
-		InternalNode newInternal;
-		Leaf l;
+		InternalNode<K> p;
+		InternalNode<K> newInternal;
+		Leaf<K> l;
 
-		public InsertInfo(InternalNode p, InternalNode newInternal, Leaf l) {
+		public InsertInfo(InternalNode<K> p, InternalNode<K> newInternal, Leaf<K> l) {
 			this.p = p;
 			this.newInternal = newInternal;
 			this.l = l;
@@ -450,13 +453,13 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	 */
 	class DeleteInfo implements OperationInfo {
 
-		InternalNode gp;
-		InternalNode p;
-		Leaf l;
+		InternalNode<K> gp;
+		InternalNode<K> p;
+		Leaf<K> l;
 		OperationInfo pinfo;
 		int pstate;
 
-		public DeleteInfo(InternalNode gp, InternalNode p, Leaf l, OperationInfo pinfo, int pstate) {
+		public DeleteInfo(InternalNode<K> gp, InternalNode<K> p, Leaf<K> l, OperationInfo pinfo, int pstate) {
 			this.gp = gp;
 			this.p = p;
 			this.l = l;
@@ -484,9 +487,27 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 		return new TreeIterator();
 	}
 
+	/**
+	 * Returns the number of elements in this tree. If this tree
+	 * contains more than <tt>Integer.MAX_VALUE</tt> elements, returns
+	 * <tt>Integer.MAX_VALUE</tt>.
+	 * <p>Beware that, unlike in most collections, this method is <em>NOT</em> a
+	 * constant-time operation. Because of the asynchronous nature of these
+	 * trees, determining the current number of elements requires an O(n)
+	 * traversal.
+	 * 
+	 * @return the number of elements in this tree
+	 */
 	@Override
 	public int size() {
-		return size.get();
+		int count = 0;
+		Iterator<K> i = iterator();
+		while (i.hasNext()) {
+			i.next();
+			if (++count == Integer.MAX_VALUE)
+				break;
+		}
+		return count;
 	}
 
 	class TreeIterator implements Iterator<K> {
@@ -505,16 +526,15 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 		 * Get a leaves snapshot with an in-order visit of the tree (wait-free
 		 * and upper bounded in O(n))
 		 */
-		@SuppressWarnings("unchecked")
-		private void visit(Node n) {
+		private void visit(Node<K> n) {
 			if (n instanceof NonBlockingTree.InternalNode)
-				visit(((InternalNode) n).getLeft());
+				visit(((InternalNode<K>) n).getLeft());
 
 			if (n instanceof NonBlockingTree.Leaf && !isDummy(n.key))
 				snapshot.add(n.key);
 
 			if (n instanceof NonBlockingTree.InternalNode)
-				visit(((InternalNode) n).getRight());
+				visit(((InternalNode<K>) n).getRight());
 		}
 
 		@Override

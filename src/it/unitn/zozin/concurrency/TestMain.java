@@ -22,7 +22,7 @@ public class TestMain {
 	static int MAX_VALUE;
 	static int NUM_TASKS;
 
-	static NonBlockingTree<Integer> tree = NonBlockingTree.getInstance(Integer.MAX_VALUE - 1, Integer.MAX_VALUE);
+	static NonBlockingTree<Integer> tree = new NonBlockingTree<Integer>(Integer.MAX_VALUE - 1, Integer.MAX_VALUE);
 
 	static ExecutorService threadPool;
 	static final Random r = new Random();
