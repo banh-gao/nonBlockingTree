@@ -11,6 +11,7 @@ import java.io.Writer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -22,7 +23,7 @@ public class TestMain {
 	static int MAX_VALUE;
 	static int NUM_TASKS;
 
-	static NonBlockingTree<Integer> tree = new NonBlockingTree<Integer>(Integer.MAX_VALUE - 1, Integer.MAX_VALUE);
+	static Set<Integer> tree = new NonBlockingTree<Integer>(Integer.MAX_VALUE - 1, Integer.MAX_VALUE);
 
 	static ExecutorService threadPool;
 	static final Random r = new Random();
@@ -33,19 +34,19 @@ public class TestMain {
 		public void run() {
 			int id = taskId.getAndIncrement();
 			int v = r.nextInt(MAX_VALUE + 1);
-			System.out.println(String.format("[TASK %s] INSERT(%s): %b", id, v, tree.insert(v)));
-			System.out.println(String.format("[TASK %s] DELETE(%s): %b", id, v, tree.delete(v)));
-			System.out.println(String.format("[TASK %s] FIND(%s): %b", id, v, tree.find(v)));
-			System.out.println(String.format("[TASK %s] INSERT(%s): %b", id, v, tree.insert(v)));
+			System.out.println(String.format("[TASK %s] INSERT(%s): %b", id, v, tree.add(v)));
+			System.out.println(String.format("[TASK %s] DELETE(%s): %b", id, v, tree.remove(v)));
+			System.out.println(String.format("[TASK %s] FIND(%s): %b", id, v, tree.contains(v)));
+			System.out.println(String.format("[TASK %s] INSERT(%s): %b", id, v, tree.add(v)));
 		}
 	};
 
 	public static void main(String[] args) throws Exception {
 		if (args.length < 4) {
-			System.out.println("Usage: " + new java.io.File(TestMain.class.getProtectionDomain().getCodeSource().getLocation().getPath()).getName() + " <numTasks> <numThreads> <maxValue> <outFile>");
-			System.out.println("numTasks\tNumber of tasks to execute. Each task performs 2 insert, 1 find and 1 delete.");
+			System.out.println("Usage: " + new java.io.File(TestMain.class.getProtectionDomain().getCodeSource().getLocation().toURI().getPath()).getName() + " <numTasks> <numThreads> <maxValue> <outFile>");
+			System.out.println("numTasks\tNumber of tasks to execute. Each task performs 4 operations in the following order using the same input value: 1 insert, 1 find, 1 delete, 1 insert.");
 			System.out.println("numThreads\tNumber of threads to be used to run the tasks concurrently.");
-			System.out.println("maxValue\tMaximum integer value to be inserted in the tree. The values used for the test are randomly chosen in the interval [0-maxValue].");
+			System.out.println("maxValue\tMaximum integer value to be inserted in the tree. The values used for the test are randomly chosen in the interval [0,maxValue].");
 			System.out.println("outFile \tFile where to save the tree in dot format at the end of the test.");
 			return;
 		}
@@ -62,7 +63,7 @@ public class TestMain {
 
 	private static void runTest() throws InterruptedException {
 		threadPool = Executors.newFixedThreadPool(MAX_THREADS);
-		System.out.println(String.format("Running %s operations using %s threads...", 5 * NUM_TASKS, MAX_THREADS));
+		System.out.println(String.format("Running %s operations using %s threads...", 4 * NUM_TASKS, MAX_THREADS));
 
 		long start = System.currentTimeMillis();
 
@@ -75,13 +76,13 @@ public class TestMain {
 		}
 
 		System.out.println(String.format("Total time:\t%s ms", System.currentTimeMillis() - start));
-		System.out.println(String.format("Operations:\t%s", 5 * NUM_TASKS));
+		System.out.println(String.format("Operations:\t%s", 4 * NUM_TASKS));
 		System.out.println(String.format("Threads:\t%s", MAX_THREADS));
 	}
 
 	private static void generatePrintout(String file) throws IOException {
 		System.out.println(String.format("Generating tree printout in %s ...", file));
-		String g = GraphGenerator.generate(tree);
+		String g = GraphGenerator.generate((NonBlockingTree<Integer>) tree);
 		Writer writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(file), "utf-8"));
 		writer.write(g);
 		writer.close();
