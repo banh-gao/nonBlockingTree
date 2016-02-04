@@ -52,13 +52,13 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	// Stores results of a search
 	private class SearchRes {
 
-		InternalNode<K> gp;
-		InternalNode<K> p;
-		Leaf<K> l;
-		OperationInfo pinfo;
-		int pstate;
-		OperationInfo gpinfo;
-		int gpstate;
+		InternalNode<K> grandParent;
+		InternalNode<K> parent;
+		Leaf<K> leaf;
+		OperationInfo parentInfo;
+		int parentState;
+		OperationInfo grandParentInfo;
+		int grandParentState;
 	}
 
 	/**
@@ -67,43 +67,43 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	private SearchRes search(K key) {
 		SearchRes r = new SearchRes();
 
-		Node<K> cur = root;
+		// Current node in search (start at tree root)
+		Node<K> curr = root;
 
 		int[] state = new int[1];
-		while (cur instanceof NonBlockingTree.InternalNode) {
-			// Remember parent of p
-			r.gp = r.p;
-			// Remember parent of l
-			r.p = (InternalNode<K>) cur;
-			// Remember update field of gp
-			r.gpinfo = r.pinfo;
-			r.gpstate = r.pstate;
+		while (curr instanceof NonBlockingTree.InternalNode) {
+			// Remember parent of parent of curr (grandParent of curr)
+			r.grandParent = r.parent;
+			// Remember parent of curr
+			r.parent = (InternalNode<K>) curr;
+			// Remember update field of grandParent
+			r.grandParentInfo = r.parentInfo;
+			r.grandParentState = r.parentState;
 
-			// Remember update field of p
-			r.pinfo = r.p.getUpdate(state);
-			r.pstate = state[0];
+			// Remember update field of parent
+			r.parentInfo = r.parent.getStateAndInfo(state);
+			r.parentState = state[0];
 
 			// Move down to appropriate child
-			if (key.compareTo(cur.key) < 0)
-				cur = r.p.getLeft();
+			if (key.compareTo(curr.key) < 0)
+				curr = r.parent.getLeft();
 			else
-				cur = r.p.getRight();
+				curr = r.parent.getRight();
 		}
 
-		r.l = (Leaf<K>) cur;
+		r.leaf = (Leaf<K>) curr;
 
 		return r;
 	}
 
 	/**
 	 * Search the given element in the tree. This method is wait-free and its
-	 * completion time is in O(n) where n is the number of elements stored in
-	 * the tree.
+	 * completion time is in O(n) where n is the number of elements currently
+	 * stored in the tree.
 	 * 
 	 * @param key
-	 *            The element to insert
-	 * @return True if the element was inserted, false if it was already in the
-	 *         tree
+	 *            The element to search
+	 * @return True if the element is present in the tree, false otherwise
 	 */
 	public boolean find(K key) {
 		if (key == null)
@@ -112,7 +112,7 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 			throw new IllegalArgumentException();
 
 		SearchRes r = search(key);
-		return r.l.key.compareTo(key) == 0;
+		return r.leaf.key.compareTo(key) == 0;
 	}
 
 	/**
@@ -139,27 +139,29 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 			SearchRes r = search(key);
 
 			// Cannot insert duplicate key
-			if (r.l.key.compareTo(key) == 0)
+			if (r.leaf.key.compareTo(key) == 0)
 				return false;
 
 			// Node already flagged, help the other and then retry the insert
-			if (r.pstate != OperationInfo.CLEAN) {
-				help(r.pinfo, r.pstate);
+			if (r.parentState != OperationInfo.CLEAN) {
+				help(r.parentInfo, r.parentState);
 				continue;
 			}
 
-			InternalNode<K> newInternal = createSubTree(r.l, key);
+			// Prepare subtree to insert and insertInfo record
+			InternalNode<K> newInternal = createSubTree(r.leaf, key);
+			opInfo = new InsertInfo(r.parent, newInternal, r.leaf);
 
-			opInfo = new InsertInfo(r.p, newInternal, r.l);
-
-			// Try to set parent flag to insert flag
-			if (r.p.setUpdate(r.pinfo, r.pstate, opInfo, OperationInfo.IFLAG)) {
-				// IFLAG successful, finish insertion
+			// Try to set parent state with insertion info
+			if (r.parent.setStateAndInfo(r.parentInfo, r.parentState, opInfo, OperationInfo.IFLAG)) {
+				// InsertionInfo successfully set, finish insertion
 				helpInsert((NonBlockingTree<K>.InsertInfo) opInfo);
 				return true;
 			} else {
-				// IFLAG failed, help who caused the failure
-				opInfo = r.p.getUpdate(state);
+				// Failed to set InsertionInfo
+				opInfo = r.parent.getStateAndInfo(state);
+				// Help to complete the pending operation and retry own insert
+				// in the next iteration
 				help(opInfo, state[0]);
 			}
 		}
@@ -189,15 +191,15 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	}
 
 	/**
-	 * Tries to complete the given insert operation on the tree
+	 * Tries to help completing the given insert operation on the tree
 	 */
 	private void helpInsert(InsertInfo insertOp) {
 		// Substitute either left or right child of the parent tree with the new
 		// subtree
-		if (insertOp.p.spliceChild(insertOp.l, insertOp.newInternal)) {
+		if (insertOp.parent.spliceChild(insertOp.leaf, insertOp.newInternal)) {
 
-			// Reset parent flag
-			insertOp.p.setUpdate(insertOp, OperationInfo.IFLAG, insertOp, OperationInfo.CLEAN);
+			// If successful reset parent flag
+			insertOp.parent.setStateAndInfo(insertOp, OperationInfo.IFLAG, insertOp, OperationInfo.CLEAN);
 		}
 	}
 
@@ -224,32 +226,34 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 			SearchRes r = search(key);
 
 			// Key is not in the tree
-			if (r.l.key.compareTo(key) != 0)
+			if (r.leaf.key.compareTo(key) != 0)
 				return false;
 
-			// If the grandparent state is not clean, help and then retry delete
-			if (r.gpstate != OperationInfo.CLEAN) {
-				help(r.gpinfo, r.gpstate);
+			// If the grandparent state is not clean, help completing it and
+			// then retry own delete in the next iteration
+			if (r.grandParentState != OperationInfo.CLEAN) {
+				help(r.grandParentInfo, r.grandParentState);
 				continue;
 			}
 
-			// If the parent state is not clean, help and then retry delete
-			if (r.gpstate != OperationInfo.CLEAN) {
-				help(r.gpinfo, r.gpstate);
+			// If the parent state is not clean, help completing it and then
+			// retry own delete in the next iteration
+			if (r.parentState != OperationInfo.CLEAN) {
+				help(r.parentInfo, r.parentState);
 				continue;
 			}
 
-			opInfo = new DeleteInfo(r.gp, r.p, r.l, r.pinfo, r.pstate);
+			opInfo = new DeleteInfo(r.grandParent, r.parent, r.leaf, r.parentInfo, r.parentState);
 
-			// Try to set grandparent flag to delete flag
-			if (r.gp.setUpdate(r.gpinfo, r.gpstate, opInfo, OperationInfo.DFLAG)) {
+			// Try to set grandparent state for delete
+			if (r.grandParent.setStateAndInfo(r.grandParentInfo, r.grandParentState, opInfo, OperationInfo.DFLAG)) {
 				// DFLAG successful, if also the marking succeeds returns,
-				// otherwise retry delete
+				// otherwise retry delete in the next iteration
 				if (helpDelete((NonBlockingTree<K>.DeleteInfo) opInfo))
 					return true;
 			} else {
 				// DFLAG failed, help who caused the failure
-				opInfo = r.gp.getUpdate(state);
+				opInfo = r.grandParent.getStateAndInfo(state);
 				help(opInfo, state[0]);
 			}
 		}
@@ -260,20 +264,20 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	 */
 	private boolean helpDelete(DeleteInfo deleteOp) {
 		// Try to mark the parent of the node to delete
-		if (deleteOp.p.setUpdate(deleteOp.pinfo, deleteOp.pstate, deleteOp, OperationInfo.MARK)) {
+		if (deleteOp.parent.setStateAndInfo(deleteOp.parentInfo, deleteOp.parentState, deleteOp, OperationInfo.MARK)) {
 			// MARK successful, finish deletion
 			helpMarked(deleteOp);
 			return true;
 		} else {
-			// MARK failed, help who caused the failure
+			// MARK failed, try helping to complete the pending operation
 			int[] ongoingState = new int[1];
-			OperationInfo ongoingOp = deleteOp.p.getUpdate(ongoingState);
+			OperationInfo ongoingOp = deleteOp.parent.getStateAndInfo(ongoingState);
 			help(ongoingOp, ongoingState[0]);
 
 			// Backtrack CAS: the delete has to be retried starting by retrying
 			// to set the grandparent DFLAG
-			ongoingOp = deleteOp.gp.getUpdate(ongoingState);
-			deleteOp.gp.setUpdate(ongoingOp, ongoingState[0], deleteOp, OperationInfo.CLEAN);
+			ongoingOp = deleteOp.grandParent.getStateAndInfo(ongoingState);
+			deleteOp.grandParent.setStateAndInfo(ongoingOp, ongoingState[0], deleteOp, OperationInfo.CLEAN);
 
 			return false;
 		}
@@ -286,16 +290,16 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 		Node<K> other;
 
 		// Set other to point to the sibling of the node to remove (deleteOp.l)
-		if (deleteOp.p.getRight() == deleteOp.l)
-			other = deleteOp.p.getLeft();
+		if (deleteOp.parent.getRight() == deleteOp.leaf)
+			other = deleteOp.parent.getLeft();
 		else
-			other = deleteOp.p.getRight();
+			other = deleteOp.parent.getRight();
 
 		// Set the sibling of the node to remove, as a child of the grandparent
-		if (deleteOp.gp.spliceChild(deleteOp.p, other)) {
+		if (deleteOp.grandParent.spliceChild(deleteOp.parent, other)) {
 
 			// Reset grandparent flag
-			deleteOp.gp.setUpdate(deleteOp, OperationInfo.DFLAG, deleteOp, OperationInfo.CLEAN);
+			deleteOp.grandParent.setStateAndInfo(deleteOp, OperationInfo.DFLAG, deleteOp, OperationInfo.CLEAN);
 		}
 	}
 
@@ -347,7 +351,8 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 		// Right child (this key < child key)
 		private volatile Node<K> right;
 
-		// Update status of the node (ongoing insert or delete operation)
+		// Update state of the node (ongoing insert or delete operation).
+		// Initialized with null info and CLEAN state
 		private AtomicStampedReference<OperationInfo> update = new AtomicStampedReference<OperationInfo>(null, OperationInfo.CLEAN);
 
 		private InternalNode(K key, Node<K> left, Node<K> right) {
@@ -378,7 +383,7 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 		 * Atomically tries to set the update state and operation info of the
 		 * node
 		 */
-		public boolean setUpdate(OperationInfo expInfo, int expState, OperationInfo newInfo, int newState) {
+		public boolean setStateAndInfo(OperationInfo expInfo, int expState, OperationInfo newInfo, int newState) {
 			return this.update.compareAndSet(expInfo, newInfo, expState, newState);
 		}
 
@@ -390,7 +395,7 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 			return right;
 		}
 
-		public OperationInfo getUpdate(int[] state) {
+		public OperationInfo getStateAndInfo(int[] state) {
 			return update.get(state);
 		}
 
@@ -401,7 +406,7 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	}
 
 	/**
-	 * A leaf node that stores the actual value in the tree.
+	 * A leaf node that stores the actual value in the tree
 	 */
 	static class Leaf<K extends Comparable<K>> extends Node<K> {
 
@@ -432,19 +437,19 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	 */
 	class InsertInfo implements OperationInfo {
 
-		InternalNode<K> p;
+		InternalNode<K> parent;
 		InternalNode<K> newInternal;
-		Leaf<K> l;
+		Leaf<K> leaf;
 
-		public InsertInfo(InternalNode<K> p, InternalNode<K> newInternal, Leaf<K> l) {
-			this.p = p;
+		public InsertInfo(InternalNode<K> parent, InternalNode<K> newInternal, Leaf<K> leaf) {
+			this.parent = parent;
 			this.newInternal = newInternal;
-			this.l = l;
+			this.leaf = leaf;
 		}
 
 		@Override
 		public String toString() {
-			return "HELPINSERT: p=" + p + ", newSub=" + newInternal + ", l=" + l;
+			return "HELPINSERT: parent=" + parent + ", newSub=" + newInternal + ", leaf=" + leaf;
 		}
 	}
 
@@ -453,61 +458,24 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 	 */
 	class DeleteInfo implements OperationInfo {
 
-		InternalNode<K> gp;
-		InternalNode<K> p;
-		Leaf<K> l;
-		OperationInfo pinfo;
-		int pstate;
+		InternalNode<K> grandParent;
+		InternalNode<K> parent;
+		Leaf<K> leaf;
+		OperationInfo parentInfo;
+		int parentState;
 
-		public DeleteInfo(InternalNode<K> gp, InternalNode<K> p, Leaf<K> l, OperationInfo pinfo, int pstate) {
-			this.gp = gp;
-			this.p = p;
-			this.l = l;
-			this.pinfo = pinfo;
-			this.pstate = pstate;
+		public DeleteInfo(InternalNode<K> grandParent, InternalNode<K> parent, Leaf<K> leaf, OperationInfo parentInfo, int parentState) {
+			this.grandParent = grandParent;
+			this.parent = parent;
+			this.leaf = leaf;
+			this.parentInfo = parentInfo;
+			this.parentState = parentState;
 		}
 
 		@Override
 		public String toString() {
-			return "HELPDELETE: gp=" + gp + ", p=" + p + ", l=" + l;
+			return "HELPDELETE: grandParent=" + grandParent + ", parent=" + parent + ", leaf=" + leaf;
 		}
-	}
-
-	/**
-	 * METHODS FOR SET INTERFACE COMPLIANCE
-	 */
-
-	@Override
-	public boolean add(K e) {
-		return insert(e);
-	}
-
-	@Override
-	public Iterator<K> iterator() {
-		return new TreeIterator();
-	}
-
-	/**
-	 * Returns the number of elements in this tree. If this tree
-	 * contains more than <tt>Integer.MAX_VALUE</tt> elements, returns
-	 * <tt>Integer.MAX_VALUE</tt>.
-	 * <p>Beware that, unlike in most collections, this method is <em>NOT</em> a
-	 * constant-time operation. Because of the asynchronous nature of these
-	 * trees, determining the current number of elements requires an O(n)
-	 * traversal.
-	 * 
-	 * @return the number of elements in this tree
-	 */
-	@Override
-	public int size() {
-		int count = 0;
-		Iterator<K> i = iterator();
-		while (i.hasNext()) {
-			i.next();
-			if (++count == Integer.MAX_VALUE)
-				break;
-		}
-		return count;
 	}
 
 	class TreeIterator implements Iterator<K> {
@@ -556,5 +524,42 @@ public class NonBlockingTree<K extends Comparable<K>> extends AbstractSet<K> {
 		private boolean isDummy(K key) {
 			return key.compareTo(dummyKey1) == 0 || key.compareTo(dummyKey2) == 0;
 		}
+	}
+
+	/**
+	 * METHODS FOR SET INTERFACE COMPLIANCE
+	 */
+
+	@Override
+	public boolean add(K e) {
+		return insert(e);
+	}
+
+	@Override
+	public Iterator<K> iterator() {
+		return new TreeIterator();
+	}
+
+	/**
+	 * Returns the number of elements in this tree. If this tree
+	 * contains more than <tt>Integer.MAX_VALUE</tt> elements, returns
+	 * <tt>Integer.MAX_VALUE</tt>.
+	 * <p>Beware that, unlike in most collections, this method is <em>NOT</em> a
+	 * constant-time operation. Because of the asynchronous nature of these
+	 * trees, determining the current number of elements requires an O(n)
+	 * traversal.
+	 * 
+	 * @return the number of elements in this tree
+	 */
+	@Override
+	public int size() {
+		int count = 0;
+		Iterator<K> i = iterator();
+		while (i.hasNext()) {
+			i.next();
+			if (++count == Integer.MAX_VALUE)
+				break;
+		}
+		return count;
 	}
 }
